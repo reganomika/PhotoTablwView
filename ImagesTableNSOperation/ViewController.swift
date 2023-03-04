@@ -7,11 +7,24 @@
 
 import UIKit
 
+final class ViewController: UIViewController {
 
-class ViewController: UITableViewController {
+    enum Constants {
+        static var rowHeight: CGFloat { 80.0 }
+    }
 
     var photos = [PhotoRecord]()
     let pendingOpearations = PendingOperations()
+
+    lazy var tableView: UITableView = {
+        let tableView = UITableView()
+        tableView.delegate = self
+        tableView.dataSource = self
+        tableView.translatesAutoresizingMaskIntoConstraints = false
+        tableView.rowHeight = Constants.rowHeight
+        tableView.estimatedRowHeight = Constants.rowHeight
+        return tableView
+    }()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -19,10 +32,22 @@ class ViewController: UITableViewController {
         fetchPhotoDetails()
 
         tableView.register(PhotoCell.self, forCellReuseIdentifier: PhotoCell.reuseIdentifier)
+
+        setup()
     }
 
-    func fetchPhotoDetails() {
+    private func setup() {
+        view.addSubview(tableView)
 
+        NSLayoutConstraint.activate([
+            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tableView.topAnchor.constraint(equalTo: view.topAnchor),
+            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+    }
+
+    private func fetchPhotoDetails() {
         if let path = Bundle.main.path(forResource: "ClassicPhotosDictionary", ofType: "plist"),
            let datasourceDictionary = NSDictionary(contentsOfFile: path) {
 
@@ -41,7 +66,7 @@ class ViewController: UITableViewController {
         }
     }
 
-    func showErrorAlert(error: Error) {
+    private func showErrorAlert(error: Error) {
         DispatchQueue.main.async {
             let alert = UIAlertController(
                 title: "Oops!",
@@ -53,13 +78,67 @@ class ViewController: UITableViewController {
         }
     }
 
-    // #pragma mark - Table view data source
+    private func startOperationsForPhotoRecord(photoDetails: PhotoRecord, indexPath: IndexPath) {
+        switch photoDetails.state {
+        case .new:
+            startDownloadForRecord(photoDetails: photoDetails, indexPath: indexPath)
+        case .downloaded:
+            startFiltrationForRecord(photoDetails: photoDetails, indexPath: indexPath)
+        default:
+            print("do nothing")
+        }
+    }
 
-    override func tableView(_ tableView: UITableView?, numberOfRowsInSection section: Int) -> Int {
+    private func startDownloadForRecord(photoDetails: PhotoRecord, indexPath: IndexPath) {
+        if let _ = pendingOpearations.downloadsInProgress[indexPath] {
+            return
+        }
+
+        let downloader = PhotoDownloader(photoRecord: photoDetails)
+
+        downloader.completionBlock = {
+            if downloader.isCancelled {
+                return
+            }
+            DispatchQueue.main.async {
+                self.pendingOpearations.downloadsInProgress.removeValue(forKey: indexPath)
+                self.tableView.reloadRows(at: [indexPath], with: .fade)
+            }
+        }
+
+        pendingOpearations.downloadsInProgress[indexPath] = downloader
+        pendingOpearations.downloadQueue.addOperation(downloader)
+    }
+
+    private func startFiltrationForRecord(photoDetails: PhotoRecord, indexPath: IndexPath) {
+        if let _ = pendingOpearations.filtrationsInProgress[indexPath] {
+            return
+        }
+
+        let downloader = ImageFiltration(photoRecord: photoDetails)
+
+        downloader.completionBlock = {
+            if downloader.isCancelled {
+                return
+            }
+            DispatchQueue.main.async {
+                self.pendingOpearations.filtrationsInProgress.removeValue(forKey: indexPath)
+                self.tableView.reloadRows(at: [indexPath], with: .none)
+            }
+        }
+
+        pendingOpearations.filtrationsInProgress[indexPath] = downloader
+        pendingOpearations.filtrationQueue.addOperation(downloader)
+    }
+}
+
+extension ViewController: UITableViewDataSource {
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         return photos.count
     }
 
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         guard let cell = tableView.dequeueReusableCell(withIdentifier: PhotoCell.reuseIdentifier, for: indexPath) as? PhotoCell else {
             return UITableViewCell()
         }
@@ -90,58 +169,12 @@ class ViewController: UITableViewController {
 
         return cell
     }
+}
 
-    func startOperationsForPhotoRecord(photoDetails: PhotoRecord, indexPath: IndexPath) {
-        switch photoDetails.state {
-        case .new:
-            startDownloadForRecord(photoDetails: photoDetails, indexPath: indexPath)
-        case .downloaded:
-            startFiltrationForRecord(photoDetails: photoDetails, indexPath: indexPath)
-        default:
-            print("do nothing")
-        }
-    }
+extension ViewController: UITableViewDelegate {
 
-    func startDownloadForRecord(photoDetails: PhotoRecord, indexPath: IndexPath) {
-        if let _ = pendingOpearations.downloadsInProgress[indexPath] {
-            return
-        }
-
-        let downloader = PhotoDownloader(photoRecord: photoDetails)
-
-        downloader.completionBlock = {
-            if downloader.isCancelled {
-                return
-            }
-            DispatchQueue.main.async {
-                self.pendingOpearations.downloadsInProgress.removeValue(forKey: indexPath)
-                self.tableView.reloadRows(at: [indexPath], with: .fade)
-            }
-        }
-
-        pendingOpearations.downloadsInProgress[indexPath] = downloader
-        pendingOpearations.downloadQueue.addOperation(downloader)
-    }
-
-    func startFiltrationForRecord(photoDetails: PhotoRecord, indexPath: IndexPath) {
-        if let _ = pendingOpearations.filtrationsInProgress[indexPath] {
-            return
-        }
-
-        let downloader = ImageFiltration(photoRecord: photoDetails)
-
-        downloader.completionBlock = {
-            if downloader.isCancelled {
-                return
-            }
-            DispatchQueue.main.async {
-                self.pendingOpearations.filtrationsInProgress.removeValue(forKey: indexPath)
-                self.tableView.reloadRows(at: [indexPath], with: .none)
-            }
-        }
-
-        pendingOpearations.filtrationsInProgress[indexPath] = downloader
-        pendingOpearations.filtrationQueue.addOperation(downloader)
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        return Constants.rowHeight
     }
 }
 
