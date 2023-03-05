@@ -14,7 +14,7 @@ final class ViewController: UIViewController {
     }
 
     var photos = [PhotoRecord]()
-    let pendingOpearations = PendingOperations()
+    let pendingOperations = PendingOperations()
 
     lazy var tableView: UITableView = {
         let tableView = UITableView()
@@ -63,14 +63,16 @@ final class ViewController: UIViewController {
             DispatchQueue.main.async {
                 self.tableView.reloadData()
             }
+        } else {
+            showErrorAlert()
         }
     }
 
-    private func showErrorAlert(error: Error) {
+    private func showErrorAlert() {
         DispatchQueue.main.async {
             let alert = UIAlertController(
                 title: "Oops!",
-                message: error.localizedDescription,
+                message: "Something was wrong",
                 preferredStyle: .alert
             )
             alert.addAction(UIAlertAction(title: "OK", style: .default))
@@ -85,12 +87,12 @@ final class ViewController: UIViewController {
         case .downloaded:
             startFiltrationForRecord(photoDetails: photoDetails, indexPath: indexPath)
         default:
-            print("do nothing")
+            break
         }
     }
 
     private func startDownloadForRecord(photoDetails: PhotoRecord, indexPath: IndexPath) {
-        if let _ = pendingOpearations.downloadsInProgress[indexPath] {
+        if let _ = pendingOperations.downloadsInProgress[indexPath] {
             return
         }
 
@@ -101,17 +103,17 @@ final class ViewController: UIViewController {
                 return
             }
             DispatchQueue.main.async {
-                self.pendingOpearations.downloadsInProgress.removeValue(forKey: indexPath)
+                self.pendingOperations.downloadsInProgress.removeValue(forKey: indexPath)
                 self.tableView.reloadRows(at: [indexPath], with: .fade)
             }
         }
 
-        pendingOpearations.downloadsInProgress[indexPath] = downloader
-        pendingOpearations.downloadQueue.addOperation(downloader)
+        pendingOperations.downloadsInProgress[indexPath] = downloader
+        pendingOperations.downloadQueue.addOperation(downloader)
     }
 
     private func startFiltrationForRecord(photoDetails: PhotoRecord, indexPath: IndexPath) {
-        if let _ = pendingOpearations.filtrationsInProgress[indexPath] {
+        if let _ = pendingOperations.filtrationsInProgress[indexPath] {
             return
         }
 
@@ -122,13 +124,50 @@ final class ViewController: UIViewController {
                 return
             }
             DispatchQueue.main.async {
-                self.pendingOpearations.filtrationsInProgress.removeValue(forKey: indexPath)
+                self.pendingOperations.filtrationsInProgress.removeValue(forKey: indexPath)
                 self.tableView.reloadRows(at: [indexPath], with: .none)
             }
         }
 
-        pendingOpearations.filtrationsInProgress[indexPath] = downloader
-        pendingOpearations.filtrationQueue.addOperation(downloader)
+        pendingOperations.filtrationsInProgress[indexPath] = downloader
+        pendingOperations.filtrationQueue.addOperation(downloader)
+    }
+
+    private func suspendAllOperations () {
+        pendingOperations.downloadQueue.isSuspended = true
+        pendingOperations.filtrationQueue.isSuspended = true
+    }
+
+    private func resumeAllOperations () {
+        pendingOperations.downloadQueue.isSuspended = false
+        pendingOperations.filtrationQueue.isSuspended = false
+    }
+
+    private func loadImagesForOnscreenCells() {
+        if let pathsArray = tableView.indexPathsForVisibleRows {
+            var allPendingOperations = Set(pendingOperations.downloadsInProgress.keys).union(pendingOperations.filtrationsInProgress.keys)
+
+            let visiblePaths = Set(pathsArray)
+            let toBeCancelled = allPendingOperations.subtracting(visiblePaths)
+
+            let toBeStarted = visiblePaths.subtracting(allPendingOperations)
+
+            for indexPath in toBeCancelled {
+                if let pendingDownload = pendingOperations.downloadsInProgress[indexPath] {
+                    pendingDownload.cancel()
+                }
+                pendingOperations.downloadsInProgress.removeValue(forKey: indexPath)
+
+                if let pendingFiltration = pendingOperations.filtrationsInProgress[indexPath] {
+                    pendingFiltration.cancel()
+                }
+
+                for indexPath in toBeStarted {
+                    let recordToProcess = photos[indexPath.row]
+                    startOperationsForPhotoRecord(photoDetails: recordToProcess, indexPath: indexPath)
+                }
+            }
+        }
     }
 }
 
@@ -175,6 +214,22 @@ extension ViewController: UITableViewDelegate {
 
     func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
         return Constants.rowHeight
+    }
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        suspendAllOperations()
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate {
+            loadImagesForOnscreenCells()
+            resumeAllOperations()
+        }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        loadImagesForOnscreenCells()
+        resumeAllOperations()
     }
 }
 
